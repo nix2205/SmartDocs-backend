@@ -1,0 +1,10 @@
+const express = require("express");
+const upload = require("../middleware/upload");
+const { uploadDocuments, getDocuments, getDocumentById, getDocumentFile, deleteDocument } = require("../controllers/documentController");
+const router = express.Router();
+router.post("/upload", upload.array("documents", 10), uploadDocuments);
+router.get("/", getDocuments);
+router.get("/:id/file", getDocumentFile);
+router.get("/:id", getDocumentById);
+router.delete("/:id", deleteDocument);
+module.exports = router;
