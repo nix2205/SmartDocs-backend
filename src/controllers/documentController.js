@@ -3,6 +3,8 @@ const fs = require("fs");
 const path = require("path");
 
 const Document = require("../models/Document");
+const Contradiction = require("../models/Contradiction");
+const cache = require("../services/cacheService");
 
 const {
   parseDocument,
@@ -592,10 +594,34 @@ const deleteDocument = async (
       document._id
     );
 
-    
+    await Contradiction.deleteMany({
+      userId: req.user.id,
+      $or: [
+        { "statementA.documentId": document._id },
+        { "statementB.documentId": document._id },
+        { "resolvedStatement.documentId": document._id },
+        { "sources.documentId": document._id },
+        {
+          "statementA.document": document.originalName,
+          "statementA.documentId": null,
+        },
+        {
+          "statementB.document": document.originalName,
+          "statementB.documentId": null,
+        },
+        {
+          "sources.documentName": document.originalName,
+          "sources.documentId": null,
+        },
+      ],
+    });
+
     await Document.findByIdAndDelete(
       document._id
     );
+
+    cache.clear("retrieval");
+    cache.clear("answer");
 
     
     try {

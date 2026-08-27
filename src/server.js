@@ -32,6 +32,7 @@ const { requireAuth } =
 
 const {
   initializeCollection,
+  cleanupOrphanedVectors,
 } = require("./services/vectorService");
 
 
@@ -193,6 +194,15 @@ const startServer =
       await connectDB();
 
       await initializeCollection();
+
+      try {
+        await cleanupOrphanedVectors();
+      } catch (cleanupError) {
+        console.error(
+          "Orphaned vector cleanup failed:",
+          cleanupError.message
+        );
+      }
 
       app.listen(
         PORT,

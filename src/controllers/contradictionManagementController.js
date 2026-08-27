@@ -56,8 +56,91 @@ const attachDocumentMetadata = async (contradictions) => {
 
 const getContradictions = async (req, res) => {
   try {
-    const contradictions = await Contradiction.find({ userId: req.user.id }).sort({ createdAt: -1 }).lean();
-    const enriched = await attachDocumentMetadata(contradictions);
+    const contradictions = await Contradiction.find({
+      userId: req.user.id,
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const referencedIds = [
+      ...new Set(
+        contradictions
+          .flatMap((contradiction) => [
+            contradiction.statementA?.documentId,
+            contradiction.statementB?.documentId,
+            contradiction.resolvedStatement?.documentId,
+            ...(contradiction.sources || []).map((source) => source?.documentId),
+          ])
+          .filter(Boolean)
+          .map(String)
+      ),
+    ];
+
+    const referencedNames = [
+      ...new Set(
+        contradictions
+          .flatMap((contradiction) => [
+            contradiction.statementA?.document,
+            contradiction.statementB?.document,
+            contradiction.resolvedStatement?.document,
+            ...(contradiction.sources || []).map((source) => source?.documentName),
+          ])
+          .filter(Boolean)
+      ),
+    ];
+
+    const documentClauses = [];
+    if (referencedIds.length) {
+      documentClauses.push({ _id: { $in: referencedIds } });
+    }
+    if (referencedNames.length) {
+      documentClauses.push({ originalName: { $in: referencedNames } });
+    }
+
+    const activeDocuments = documentClauses.length
+      ? await Document.find({ userId: req.user.id, $or: documentClauses })
+          .select("_id originalName")
+          .lean()
+      : [];
+
+    const activeIds = new Set(
+      activeDocuments.map((document) => String(document._id))
+    );
+    const activeNames = new Set(
+      activeDocuments.map((document) => document.originalName)
+    );
+
+    const statementIsActive = (statement) =>
+      Boolean(
+        (statement?.documentId && activeIds.has(String(statement.documentId))) ||
+          (statement?.document && activeNames.has(statement.document))
+      );
+
+    const sourceIsActive = (source) =>
+      Boolean(
+        (source?.documentId && activeIds.has(String(source.documentId))) ||
+          (source?.documentName && activeNames.has(source.documentName))
+      );
+
+    const activeContradictions = contradictions.filter((contradiction) =>
+      statementIsActive(contradiction.statementA) ||
+      statementIsActive(contradiction.statementB) ||
+      statementIsActive(contradiction.resolvedStatement) ||
+      (contradiction.sources || []).some(sourceIsActive)
+    );
+
+    const orphanIds = contradictions
+      .filter((contradiction) => !activeContradictions.includes(contradiction))
+      .map((contradiction) => contradiction._id);
+
+    if (orphanIds.length) {
+      await Contradiction.deleteMany({
+        _id: { $in: orphanIds },
+        userId: req.user.id,
+      });
+    }
+
+    const enriched = await attachDocumentMetadata(activeContradictions);
     return res.json({ success: true, count: enriched.length, contradictions: enriched });
   } catch (error) {
     console.error("Failed to fetch contradictions:", error);
@@ -93,6 +176,7 @@ const updateContradictionStatus = async (req, res) => {
       contradiction.resolutionChoice = resolutionChoice;
       contradiction.resolvedStatement = {
         document: selectedStatement.document || null,
+        documentId: selectedStatement.documentId || null,
         text: selectedStatement.text || null,
         page: selectedStatement.page ?? null,
         section: selectedStatement.section ?? null,

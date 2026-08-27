@@ -54,6 +54,11 @@ const contradictionSchema = new mongoose.Schema(
     },
     resolvedStatement: {
       document: { type: String, default: null },
+      documentId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Document",
+        default: null,
+      },
       text: { type: String, default: null },
       page: { type: Number, default: null },
       section: { type: String, default: null },

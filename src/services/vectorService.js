@@ -1,6 +1,7 @@
 const qdrant = require("../config/qdrant");
 const { v5: uuidv5 } = require("uuid");
 const { enrichChunksForIndexing } = require("./contextualEnrichmentService");
+const Document = require("../models/Document");
 
 const COLLECTION_NAME = "document_chunks_v2";
 const VECTOR_SIZE = 384;
@@ -75,6 +76,7 @@ const initializeCollection = async () => {
 const storeChunks = async ({
   documentId,
   documentName,
+  userId,
   chunks,
   generateEmbedding,
 }) => {
@@ -100,6 +102,7 @@ const storeChunks = async ({
         documentId:
           documentId.toString(),
         documentName,
+        userId: userId ? userId.toString() : null,
         chunkIndex:
           chunk.chunkIndex,
         localChunkIndex:
@@ -168,13 +171,51 @@ const searchSimilarChunks = async (
           COLLECTION_NAME,
           {
             query: vector,
-            limit,
+            limit: Math.max(limit * 3, limit),
             with_payload: true,
             timeout: 30,
           }
         );
 
-      return response.points || [];
+      const points = response.points || [];
+      if (!points.length) {
+        return [];
+      }
+
+      const documentIds = [
+        ...new Set(
+          points
+            .map((point) => point?.payload?.documentId)
+            .filter(Boolean)
+            .map(String)
+        ),
+      ];
+
+      if (!documentIds.length) {
+        return [];
+      }
+
+      const documentQuery = {
+        _id: { $in: documentIds },
+      };
+
+      if (userId) {
+        documentQuery.userId = userId;
+      }
+
+      const activeDocuments = await Document.find(documentQuery)
+        .select("_id")
+        .lean();
+
+      const activeIds = new Set(
+        activeDocuments.map((document) => String(document._id))
+      );
+
+      return points
+        .filter((point) =>
+          activeIds.has(String(point?.payload?.documentId || ""))
+        )
+        .slice(0, limit);
     } catch (error) {
       if (attempt === maxAttempts) {
         throw error;
@@ -291,6 +332,69 @@ const deleteDocumentVectors = async (
   );
 };
 
+const cleanupOrphanedVectors = async () => {
+  let offset = null;
+  let deleted = 0;
+
+  do {
+    const page = await qdrant.scroll(COLLECTION_NAME, {
+      limit: 256,
+      with_payload: true,
+      with_vector: false,
+      ...(offset !== null ? { offset } : {}),
+    });
+
+    const points = page.points || [];
+    if (!points.length) {
+      offset = page.next_page_offset ?? null;
+      continue;
+    }
+
+    const documentIds = [
+      ...new Set(
+        points
+          .map((point) => point?.payload?.documentId)
+          .filter(Boolean)
+          .map(String)
+      ),
+    ];
+
+    const existingDocuments = documentIds.length
+      ? await Document.find({ _id: { $in: documentIds } })
+          .select("_id")
+          .lean()
+      : [];
+
+    const existingIds = new Set(
+      existingDocuments.map((document) => String(document._id))
+    );
+
+    const orphanIds = points
+      .filter((point) => {
+        const documentId = point?.payload?.documentId;
+        return documentId && !existingIds.has(String(documentId));
+      })
+      .map((point) => point.id)
+      .filter(Boolean);
+
+    if (orphanIds.length) {
+      await qdrant.delete(COLLECTION_NAME, {
+        wait: true,
+        points: orphanIds,
+      });
+      deleted += orphanIds.length;
+    }
+
+    offset = page.next_page_offset ?? null;
+  } while (offset !== null);
+
+  if (deleted) {
+    console.log(`Removed ${deleted} orphaned vector chunk(s) from Qdrant.`);
+  }
+
+  return deleted;
+};
+
 module.exports = {
   initializeCollection,
   storeChunks,
@@ -298,6 +402,7 @@ module.exports = {
   retrieveChunkByIndex,
   retrieveNeighborChunks,
   deleteDocumentVectors,
+  cleanupOrphanedVectors,
   getPointId,
   COLLECTION_NAME,
 };

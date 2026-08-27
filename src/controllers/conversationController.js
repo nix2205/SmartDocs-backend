@@ -4,6 +4,22 @@ const Document = require("../models/Document");
 const enrichConversationDocumentIds = async (conversation, userId) => {
   const messages = conversation?.messages || [];
 
+  const documentIds = [
+    ...new Set(
+      messages
+        .flatMap((message) => [
+          ...(message.sources || []).map((source) => source?.documentId),
+          ...(message.contradictions || []).flatMap((contradiction) => [
+            contradiction?.statementA?.documentId,
+            contradiction?.statementB?.documentId,
+            contradiction?.resolvedStatement?.documentId,
+          ]),
+        ])
+        .filter(Boolean)
+        .map(String)
+    ),
+  ];
+
   const documentNames = [
     ...new Set(
       messages
@@ -19,16 +35,19 @@ const enrichConversationDocumentIds = async (conversation, userId) => {
     ),
   ];
 
-  if (!documentNames.length) {
-    return conversation;
+  const clauses = [];
+  if (documentIds.length) {
+    clauses.push({ _id: { $in: documentIds } });
+  }
+  if (documentNames.length) {
+    clauses.push({ originalName: { $in: documentNames } });
   }
 
-  const documents = await Document.find({
-    userId,
-    originalName: { $in: documentNames },
-  })
-    .select("_id originalName")
-    .lean();
+  const documents = clauses.length
+    ? await Document.find({ userId, $or: clauses })
+        .select("_id originalName")
+        .lean()
+    : [];
 
   const documentMap = new Map(
     documents.map((document) => [
@@ -36,48 +55,72 @@ const enrichConversationDocumentIds = async (conversation, userId) => {
       String(document._id),
     ])
   );
+  const activeIds = new Set(documents.map((document) => String(document._id)));
+  const activeNames = new Set(documents.map((document) => document.originalName));
+
+  const resolveDocumentId = (item, name) => {
+    if (item?.documentId && activeIds.has(String(item.documentId))) {
+      return String(item.documentId);
+    }
+    return documentMap.get(name) || null;
+  };
+
+  const sourceIsActive = (source) => {
+    const id = resolveDocumentId(source, source?.documentName);
+    return Boolean(id && activeIds.has(id)) || Boolean(
+      source?.documentName && activeNames.has(source.documentName)
+    );
+  };
 
   return {
     ...conversation,
     messages: messages.map((message) => ({
       ...message,
-      sources: (message.sources || []).map((source) => ({
-        ...source,
-        documentId:
-          source?.documentId ||
-          documentMap.get(source?.documentName) ||
-          null,
-      })),
-      contradictions: (message.contradictions || []).map((contradiction) => ({
-        ...contradiction,
-        statementA: contradiction?.statementA
-          ? {
-              ...contradiction.statementA,
-              documentId:
-                contradiction.statementA.documentId ||
-                documentMap.get(contradiction.statementA.document) ||
-                null,
-            }
-          : contradiction.statementA,
-        statementB: contradiction?.statementB
-          ? {
-              ...contradiction.statementB,
-              documentId:
-                contradiction.statementB.documentId ||
-                documentMap.get(contradiction.statementB.document) ||
-                null,
-            }
-          : contradiction.statementB,
-        resolvedStatement: contradiction?.resolvedStatement
-          ? {
-              ...contradiction.resolvedStatement,
-              documentId:
-                contradiction.resolvedStatement.documentId ||
-                documentMap.get(contradiction.resolvedStatement.document) ||
-                null,
-            }
-          : contradiction.resolvedStatement,
-      })),
+      sources: (message.sources || [])
+        .filter(sourceIsActive)
+        .map((source) => ({
+          ...source,
+          documentId: resolveDocumentId(source, source?.documentName),
+        })),
+      contradictions: (message.contradictions || [])
+        .map((contradiction) => ({
+          ...contradiction,
+          statementA: contradiction?.statementA
+            ? {
+                ...contradiction.statementA,
+                documentId: resolveDocumentId(
+                  contradiction.statementA,
+                  contradiction.statementA.document || contradiction.statementA.documentName
+                ),
+              }
+            : contradiction.statementA,
+          statementB: contradiction?.statementB
+            ? {
+                ...contradiction.statementB,
+                documentId: resolveDocumentId(
+                  contradiction.statementB,
+                  contradiction.statementB.document || contradiction.statementB.documentName
+                ),
+              }
+            : contradiction.statementB,
+          resolvedStatement: contradiction?.resolvedStatement
+            ? {
+                ...contradiction.resolvedStatement,
+                documentId: resolveDocumentId(
+                  contradiction.resolvedStatement,
+                  contradiction.resolvedStatement.document || contradiction.resolvedStatement.documentName
+                ),
+              }
+            : contradiction.resolvedStatement,
+        }))
+        .filter((contradiction) => {
+          const a = contradiction.statementA?.documentId;
+          const b = contradiction.statementB?.documentId;
+          return Boolean(
+            (a && activeIds.has(String(a))) ||
+            (b && activeIds.has(String(b)))
+          );
+        }),
     })),
   };
 };

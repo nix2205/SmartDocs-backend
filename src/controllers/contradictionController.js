@@ -101,6 +101,11 @@ const enrichStatementMetadata = (
       payload.documentName ||
       "Unknown document",
 
+    documentId:
+      statement?.documentId ||
+      payload.documentId ||
+      null,
+
     text:
       statement?.text ||
       payload.text ||
@@ -237,6 +242,11 @@ const checkContradictions = async (
                   documentName:
                     result.payload
                       ?.documentName,
+
+                  documentId:
+                    result.payload
+                      ?.documentId ||
+                    null,
 
                   pageNumber:
                     result.payload
