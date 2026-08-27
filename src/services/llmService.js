@@ -128,8 +128,8 @@ If a conflict is resolved, use the authoritative statement and do not describe i
 If a conflict is unresolved and affects the question, briefly explain the disagreement without choosing a side.
 A newer date alone does not supersede an older document.
 For follow-up questions, use the preceding conversation to identify the topic, then answer only from evidence that addresses that same topic.
-Primary source entries contain the exact citation text. Related context entries are supporting context and must not be cited as primary evidence.
-Use citations exactly as [SOURCE 1], [SOURCE 2], matching the primary source numbers.
+Primary source entries contain the strongest evidence. Related context entries are supporting context.
+Do not add citation markers, source numbers, bracketed source labels, or any internal citation notation to the answer. The interface displays the supporting sources separately.
 Keep the answer concise. For a simple factual question, answer in one or two sentences.
 Do not mention internal implementation details.
 

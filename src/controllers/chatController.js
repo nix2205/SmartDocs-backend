@@ -217,22 +217,10 @@ const normalizeContradictionCitations = (
   answer = "",
   sourceCount = 0
 ) => {
-  if (!sourceCount) {
-    return answer.replace(/\[SOURCE\s+\d+\]/gi, "").trim();
-  }
-
-  const citations = Array.from(
-    { length: sourceCount },
-    (_, index) => `[SOURCE ${index + 1}]`
-  ).join(" ");
-
-  return (
-    answer
-      .replace(/\[SOURCE\s+\d+\]/gi, "")
-      .replace(/\s{2,}/g, " ")
-      .trim() +
-    ` ${citations}`
-  );
+  return String(answer || "")
+    .replace(/\[SOURCE\s+\d+\]/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 };
 
 const buildSource = (result) => {
@@ -264,14 +252,38 @@ const buildSource = (result) => {
   };
 };
 
-const buildStatementSource = (statement) => {
+const getDocumentIdForStatement = (statement, resultPool = []) => {
+  if (statement?.documentId) {
+    return String(statement.documentId);
+  }
+
+  const documentName =
+    statement?.document ||
+    statement?.documentName ||
+    "";
+
+  if (!documentName) {
+    return null;
+  }
+
+  const match = resultPool.find((result) => {
+    const payload = result?.payload || result || {};
+    return (
+      payload.documentName === documentName ||
+      payload.document === documentName
+    );
+  });
+
+  return match?.payload?.documentId || match?.documentId || null;
+};
+
+const buildStatementSource = (statement, resultPool = []) => {
   if (!statement) {
     return null;
   }
 
   return {
-    documentId:
-      statement.documentId || null,
+    documentId: getDocumentIdForStatement(statement, resultPool),
 
     documentName:
       statement.document ||
@@ -291,6 +303,34 @@ const buildStatementSource = (statement) => {
 
     text:
       statement.text || "",
+  };
+};
+
+const enrichContradictionDocumentIds = (contradiction, resultPool = []) => {
+  if (!contradiction) {
+    return contradiction;
+  }
+
+  const enrichStatement = (statement) => {
+    if (!statement) return statement;
+
+    const documentId = getDocumentIdForStatement(
+      statement,
+      resultPool
+    );
+
+    return documentId
+      ? { ...statement, documentId }
+      : statement;
+  };
+
+  return {
+    ...contradiction,
+    statementA: enrichStatement(contradiction.statementA),
+    statementB: enrichStatement(contradiction.statementB),
+    resolvedStatement: enrichStatement(
+      contradiction.resolvedStatement
+    ),
   };
 };
 
@@ -665,10 +705,16 @@ Content: ${compactText}`;
                     "warning",
 
                   statementA:
-                    contradiction.statementA,
+                    enrichContradictionDocumentIds(
+                      contradiction,
+                      results
+                    ).statementA,
 
                   statementB:
-                    contradiction.statementB,
+                    enrichContradictionDocumentIds(
+                      contradiction,
+                      results
+                    ).statementB,
 
                   explanation:
                     contradiction.explanation,
@@ -685,6 +731,9 @@ Content: ${compactText}`;
                       (source) => ({
                         documentName:
                           source.documentName,
+
+                        documentId:
+                          source.documentId || null,
 
                         pageNumber:
                           source.pageNumber,
@@ -771,6 +820,11 @@ Content: ${compactText}`;
         if (!contradiction?._id) {
           return;
         }
+
+        contradiction = enrichContradictionDocumentIds(
+          contradiction,
+          results
+        );
 
         const previousUserQuestion = [...conversation.messages]
           .reverse()
@@ -891,7 +945,8 @@ data: ${JSON.stringify({
         resolvedContradictions
           .map((contradiction) =>
             buildStatementSource(
-              contradiction.resolvedStatement
+              contradiction.resolvedStatement,
+              results
             )
           )
           .filter(Boolean)
@@ -902,10 +957,12 @@ data: ${JSON.stringify({
         unresolvedContradictions
           .flatMap((contradiction) => [
             buildStatementSource(
-              contradiction.statementA
+              contradiction.statementA,
+              results
             ),
             buildStatementSource(
-              contradiction.statementB
+              contradiction.statementB,
+              results
             ),
           ])
           .filter(Boolean)

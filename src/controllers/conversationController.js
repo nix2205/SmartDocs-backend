@@ -1,4 +1,86 @@
 const Conversation = require("../models/Conversation");
+const Document = require("../models/Document");
+
+const enrichConversationDocumentIds = async (conversation, userId) => {
+  const messages = conversation?.messages || [];
+
+  const documentNames = [
+    ...new Set(
+      messages
+        .flatMap((message) => [
+          ...(message.sources || []).map((source) => source?.documentName),
+          ...(message.contradictions || []).flatMap((contradiction) => [
+            contradiction?.statementA?.document,
+            contradiction?.statementB?.document,
+            contradiction?.resolvedStatement?.document,
+          ]),
+        ])
+        .filter(Boolean)
+    ),
+  ];
+
+  if (!documentNames.length) {
+    return conversation;
+  }
+
+  const documents = await Document.find({
+    userId,
+    originalName: { $in: documentNames },
+  })
+    .select("_id originalName")
+    .lean();
+
+  const documentMap = new Map(
+    documents.map((document) => [
+      document.originalName,
+      String(document._id),
+    ])
+  );
+
+  return {
+    ...conversation,
+    messages: messages.map((message) => ({
+      ...message,
+      sources: (message.sources || []).map((source) => ({
+        ...source,
+        documentId:
+          source?.documentId ||
+          documentMap.get(source?.documentName) ||
+          null,
+      })),
+      contradictions: (message.contradictions || []).map((contradiction) => ({
+        ...contradiction,
+        statementA: contradiction?.statementA
+          ? {
+              ...contradiction.statementA,
+              documentId:
+                contradiction.statementA.documentId ||
+                documentMap.get(contradiction.statementA.document) ||
+                null,
+            }
+          : contradiction.statementA,
+        statementB: contradiction?.statementB
+          ? {
+              ...contradiction.statementB,
+              documentId:
+                contradiction.statementB.documentId ||
+                documentMap.get(contradiction.statementB.document) ||
+                null,
+            }
+          : contradiction.statementB,
+        resolvedStatement: contradiction?.resolvedStatement
+          ? {
+              ...contradiction.resolvedStatement,
+              documentId:
+                contradiction.resolvedStatement.documentId ||
+                documentMap.get(contradiction.resolvedStatement.document) ||
+                null,
+            }
+          : contradiction.resolvedStatement,
+      })),
+    })),
+  };
+};
 
 const getConversations = async (req, res) => {
   try {
@@ -37,7 +119,16 @@ const getConversationById = async (req, res) => {
       return res.status(404).json({ success: false, message: "Conversation not found" });
     }
 
-    return res.json({ success: true, conversation });
+    const enrichedConversation =
+      await enrichConversationDocumentIds(
+        conversation,
+        req.user.id
+      );
+
+    return res.json({
+      success: true,
+      conversation: enrichedConversation,
+    });
   } catch (error) {
     console.error("Failed to fetch conversation:", error);
     return res.status(500).json({ success: false, message: "Failed to fetch conversation" });
